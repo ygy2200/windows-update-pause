@@ -4,6 +4,7 @@
 
 **只写「暂停」状态**——不禁用服务、不改组策略、不删任何文件。所以随时能在系统设置里点「恢复更新」，不会把系统搞坏。
 
+[![test](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml/badge.svg)](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml)
 ![version](https://img.shields.io/badge/version-2.1.3-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
@@ -231,6 +232,8 @@ Windows 更新暂停工具 v2.1.3
 
 **④ 自检第 12 项（自动扫描任务）在非管理员下是「跳过」。** `System32\Tasks` 目录普通用户不可读，这是权限限制，不是工具缺陷。
 
+**⑤ CI 的真实写入验证有边界。** 它能证明「注册表写入 / 读回 / 恢复」这条链路正确，但证明不了「更新引擎真的因此停止下载更新了」。后者依赖系统内部行为，只能实际用一段时间观察。工具的做法是把暂停状态写正确、并在自检里持续校验它没被改回去。
+
 ---
 
 ## 开发自检
@@ -289,6 +292,16 @@ python test_e2e.py
 | T7 | 参数校验与异常路径：年数越界拒绝、到期时间早于当前拒绝、起始晚于到期自动回退 |
 
 全部用例都会断言「退出码 0」，可直接接进任何 CI。
+
+### ⑤ 真实 HKLM 往返（CI 专属）
+
+`test_hklm.py` 在真实注册表上做一次完整往返：**写入 10 年 → 逐项校验 → 恢复原状 → 校验恢复**。
+
+**本地默认不跑。** 双重闸门：必须同时满足「设了 `WU_PAUSE_ALLOW_HKLM_TEST=1`」和「进程是管理员」，否则直接 SKIP 退出 0。所以误跑也不会动到自己的机器。
+
+GitHub Actions 的 `windows-latest` runner 带管理员权限，所以**每次 push 都会真跑一遍**，结果写在 Actions 页面的 Step Summary 里。
+
+这一步证明的是：键组写得对、系统读得回、能干净还原。
 
 ---
 
