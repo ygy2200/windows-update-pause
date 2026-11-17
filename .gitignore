@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# 构建产物
+build/
+dist/
+*.spec
+
+# 运行时数据（含本机注册表快照，绝不可提交）
+backup/
+logs/
+
+# 打包产物
+WindowsUpdatePause.exe
+*.exe
+*.dll
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
