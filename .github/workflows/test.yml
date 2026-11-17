@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Core self-check (22 asserts + 7 fault-injection)
+        run: python core.py --selftest
+
+      - name: End-to-end (39 checks, HKCU sandbox)
+        run: python test_e2e.py
+
+      - name: Real HKLM round-trip (runs only if runner has admin)
+        env:
+          WU_PAUSE_ALLOW_HKLM_TEST: '1'
+        run: python test_hklm.py

@@ -1,0 +1,148 @@
+# -*- coding: utf-8 -*-
+"""
+真实 HKLM 写入测试
+
+验证「写入注册表后，系统能不能正确读回」——这是 HKCU 沙箱测试覆盖不到的最后一层。
+
+**危险操作，双重保险：**
+
+1. 必须显式设置环境变量 `WU_PAUSE_ALLOW_HKLM_TEST=1` 才会执行。
+   不设就跳过（本地误跑也不会动到你的注册表）。
+2. 必须是管理员。
+
+设计用途：在 GitHub Actions 的一次性虚拟机上跑，验证真实写入链路。
+本地不要跑，除非你清楚自己在做什么。
+
+执行流程：备份原值（内存）→ 写入 10 年 → 逐项校验 → 恢复原值 → 校验恢复。
+
+用法：
+    set WU_PAUSE_ALLOW_HKLM_TEST=1
+    python test_hklm.py
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import core  # noqa: E402
+
+
+def _write_summary(text: str) -> None:
+    """写 GitHub Actions 的步骤摘要，让 CI 页面一眼看到结论。"""
+    p = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not p:
+        return
+    try:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except OSError:
+        pass
+
+
+def main() -> int:
+    if os.environ.get("WU_PAUSE_ALLOW_HKLM_TEST") != "1":
+        print("SKIP：未设置 WU_PAUSE_ALLOW_HKLM_TEST=1")
+        print("      出于安全，不在本机真实注册表上做写入测试。")
+        _write_summary("### 真实 HKLM 测试\n\n⏭ 跳过（未设置 WU_PAUSE_ALLOW_HKLM_TEST=1）\n")
+        return 0
+
+    if not core.has_admin():
+        print("SKIP：当前不是管理员，无法写 HKLM。")
+        print("      CI 环境若带提权会自动执行；本地请以管理员运行。")
+        _write_summary("### 真实 HKLM 测试\n\n⏭ 跳过（非管理员，无法写 HKLM）\n")
+        return 0
+
+    print("=" * 58)
+    print("真实 HKLM 写入测试")
+    print("=" * 58)
+
+    fails = 0
+
+    def check(name: str, cond: bool, extra: str = "") -> None:
+        nonlocal fails
+        tail = f"  ({extra})" if extra else ""
+        if cond:
+            print(f"  OK    {name}{tail}")
+        else:
+            fails += 1
+            print(f"  FAIL  {name}{tail}")
+
+    # ---------- 1. 备份原状（只在内存里，不落盘） ----------
+    original = core.read_pause_state()
+    print(f"\n原状态：cap={original.cap_days}  "
+          f"expiry={original.expiry_utc}  "
+          f"status={original.quality_status}/{original.feature_status}")
+
+    ok_write = False
+    try:
+        # ---------- 2. 写入 ----------
+        print("\n写入 10 年暂停…")
+        core.apply_pause(10)
+
+        # ---------- 3. 读回校验 ----------
+        st = core.read_pause_state()
+        check("上限已写入且足够", (st.cap_days or 0) >= 36500, f"cap={st.cap_days}")
+        check("两个状态位 = 1", st.quality_status == 1 and st.feature_status == 1,
+              f"{st.quality_status}/{st.feature_status}")
+        check("到期时间可解析", st.expiry_utc is not None, str(st.expiry_utc))
+        check("起始时间可解析", st.start_utc is not None)
+        check("is_paused 为真", st.is_paused)
+
+        if st.expiry_utc:
+            years = (st.expiry_utc - datetime.now(timezone.utc)).days / 365.25
+            check("到期约 10 年后", 9.9 < years < 10.1, f"{years:.2f} 年")
+
+        starts = {st.raw.get(n) for n in core.TIME_START_VALUES}
+        ends = {st.raw.get(n) for n in core.TIME_END_VALUES}
+        check("三组起始时间一致", len(starts) == 1, f"{len(starts)} 种取值")
+        check("三组到期时间一致", len(ends) == 1, f"{len(ends)} 种取值")
+
+        # ---------- 4. 健康检查必须认这个状态 ----------
+        rep = core.run_health_check()
+        core_bad = [f"{c.key}={c.status}" for c in rep.checks
+                    if c.category == "core" and c.status != "pass"]
+        check("健康检查「暂停有效性」六项全绿", not core_bad,
+              ", ".join(core_bad) if core_bad else "all pass")
+
+        ok_write = fails == 0
+
+    finally:
+        # ---------- 5. 恢复原状 ----------
+        print("\n恢复原状…")
+        try:
+            now = datetime.now(timezone.utc)
+            if original.expiry_utc and original.start_utc and original.expiry_utc > now:
+                core._apply_until(original.expiry_utc, original.start_utc)
+                restored = core.read_pause_state()
+                drift = abs((restored.expiry_utc - original.expiry_utc).total_seconds()) \
+                    if restored.expiry_utc else 9e9
+                check("原暂停状态已恢复（零漂移）", drift < 2, f"漂移 {drift:.0f}s")
+            else:
+                core.clear_pause()
+                restored = core.read_pause_state()
+                check("测试写入已清除", restored.expiry_utc is None
+                      and restored.cap_days is None)
+                check("状态位已归零",
+                      restored.quality_status == 0 and restored.feature_status == 0)
+        except Exception as e:
+            fails += 1
+            print(f"  FAIL  恢复原状失败: {e}")
+
+    print()
+    print("=" * 58)
+    if fails == 0:
+        print("真实 HKLM 往返验证通过" + ("" if ok_write else "（写入阶段有失败项）"))
+        _write_summary("### 真实 HKLM 测试\n\n"
+                       f"✅ 通过 —— 写入后系统能正确读回，恢复零漂移\n")
+    else:
+        print(f"真实 HKLM 测试失败 {fails} 项")
+        _write_summary(f"### 真实 HKLM 测试\n\n❌ 失败 {fails} 项\n")
+    return 0 if fails == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

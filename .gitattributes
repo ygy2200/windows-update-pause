@@ -1,0 +1,12 @@
+# 统一换行符，避免不同机器 checkout 结果不一致
+* text=auto
+
+*.py   text eol=crlf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# 二进制
+*.ico binary
+*.exe binary
+*.dll binary
