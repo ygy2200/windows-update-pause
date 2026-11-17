@@ -26,6 +26,12 @@ Windows 11 24H2 之后的更新引擎有个行为：**只改注册表里的 `Fli
 
 ## 用法
 
+### 直接下载（推荐）
+
+从 [**Releases**](https://github.com/ygy2200/windows-update-pause/releases/latest) 下载 `WindowsUpdatePause.exe`，双击运行，免安装、免 Python 环境。
+
+首次打开是只读模式——读状态和跑自检不需要权限。点右上角「以管理员身份重启」之后才能修改。
+
 ### 从源码运行
 
 仓库**不含打包产物**——exe 有 100MB，超过 GitHub 的单文件限制。两种方式：
