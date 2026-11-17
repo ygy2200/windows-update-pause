@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 APP_NAME = "Windows 更新暂停工具"
-APP_VERSION = "2.1.5"
+APP_VERSION = "2.1.6"
 
 # ---------------- 注册表路径 ----------------
 
@@ -317,6 +317,79 @@ def _delete_value(root: int, path: str, name: str) -> None:
             winreg.DeleteValue(k, name)
     except FileNotFoundError:
         pass
+
+
+class WriteFailed(RuntimeError):
+    """写入中途失败。
+
+    `rolled_back` 为 True 表示已完整退回操作前状态（系统没变）；
+    为 False 表示有值没回滚成功，系统处于部分写入状态，需要用户处理。
+    """
+
+    def __init__(self, message: str, rolled_back: bool = False):
+        super().__init__(message)
+        self.rolled_back = rolled_back
+
+
+def _managed_values() -> list[tuple[str, str]]:
+    """本工具会写或删的全部注册表值，(键路径, 值名)。共 11 个。"""
+    out: list[tuple[str, str]] = [(UX_PATH, CAP_VALUE)]
+    out += [(UX_PATH, n) for n in TIME_START_VALUES + TIME_END_VALUES]
+    out += [(POL_PATH, n) for n in POL_STATUS_VALUES + POL_DATE_VALUES]
+    return out
+
+
+def _capture_managed() -> dict[tuple[str, str], tuple[Any, Optional[int]]]:
+    """拍操作前的快照：(值, 类型)，不存在则是 (None, None)。"""
+    return {(p, n): _read_raw(_ROOT, p, n) for p, n in _managed_values()}
+
+
+def _restore_managed(snap: dict[tuple[str, str], tuple[Any, Optional[int]]]) -> list[str]:
+    """尽力把快照写回去，返回恢复失败的项。
+
+    恢复本身也失败时不抛异常——调用方需要拿到「哪些没回滚成功」去告诉用户，
+    而不是被第二个异常盖掉原始错误。
+    """
+    errs: list[str] = []
+    for (path, name), (val, vtype) in snap.items():
+        try:
+            if val is None:
+                _delete_value(_ROOT, path, name)
+            else:
+                _write_value(_ROOT, path, name, val,
+                             vtype if vtype is not None else winreg.REG_SZ)
+        except Exception as e:
+            errs.append(f"{name}({e.__class__.__name__})")
+    return errs
+
+
+def _atomic_write(apply_fn):
+    """写入要么全成，要么退回到操作前的样子。
+
+    为什么需要：11 个值是一个整体，少写一个就是「半暂停」——启用标记在、
+    到期时间缺，或者反过来。这种状态比完全没写更糟：用户看到「操作失败」
+    以为什么都没变，实际注册表已经动过了。
+
+    内存快照回滚优先于 .reg 备份：不依赖外部进程、不受文件占用影响、快。
+    .reg 备份仍然保留，用于「跨进程/跨时间」的人工回滚。
+    """
+    snap = _capture_managed()
+    try:
+        return apply_fn()
+    except Exception as e:
+        errs = _restore_managed(snap)
+        if errs:
+            raise WriteFailed(
+                f"写入失败：{e}\n\n"
+                f"自动回滚有 {len(errs)} 项没成功：{', '.join(errs)}\n\n"
+                f"系统现在处于部分写入状态。请点「一键修复」重新写一遍，"
+                f"或用「备份与回滚」导入改动前的 .reg。",
+                rolled_back=False
+            ) from e
+        raise WriteFailed(
+            f"写入失败：{e}\n\n已自动恢复到操作前状态，系统没有被改动。",
+            rolled_back=True
+        ) from e
 
 
 def parse_utc(text: Any) -> Optional[datetime]:
@@ -953,20 +1026,23 @@ def _apply_until(end_utc: datetime, start_utc: Optional[datetime] = None) -> dic
     # 上限必须明显大于剩余天数，否则会被引擎截断回默认
     cap = max(36500, remain_days + 730)
 
-    _write_value(_ROOT, UX_PATH, CAP_VALUE, cap, winreg.REG_DWORD)
+    def _write_all() -> dict[str, Any]:
+        _write_value(_ROOT, UX_PATH, CAP_VALUE, cap, winreg.REG_DWORD)
 
-    for n in TIME_START_VALUES:
-        _write_value(_ROOT, UX_PATH, n, start_s, winreg.REG_SZ)
-    for n in TIME_END_VALUES:
-        _write_value(_ROOT, UX_PATH, n, end_s, winreg.REG_SZ)
+        for n in TIME_START_VALUES:
+            _write_value(_ROOT, UX_PATH, n, start_s, winreg.REG_SZ)
+        for n in TIME_END_VALUES:
+            _write_value(_ROOT, UX_PATH, n, end_s, winreg.REG_SZ)
 
-    for n in POL_STATUS_VALUES:
-        _write_value(_ROOT, POL_PATH, n, 1, winreg.REG_DWORD)
-    for n in POL_DATE_VALUES:
-        _write_value(_ROOT, POL_PATH, n, local_s, winreg.REG_SZ)
+        for n in POL_STATUS_VALUES:
+            _write_value(_ROOT, POL_PATH, n, 1, winreg.REG_DWORD)
+        for n in POL_DATE_VALUES:
+            _write_value(_ROOT, POL_PATH, n, local_s, winreg.REG_SZ)
 
-    return {"start": start_s, "end": end_s, "days": span_days,
-            "remain": remain_days, "cap": cap}
+        return {"start": start_s, "end": end_s, "days": span_days,
+                "remain": remain_days, "cap": cap}
+
+    return _atomic_write(_write_all)
 
 
 def apply_pause(years: float) -> dict[str, Any]:
@@ -982,13 +1058,16 @@ def apply_pause(years: float) -> dict[str, Any]:
 def clear_pause() -> None:
     _require_write()
 
-    for n in TIME_START_VALUES + TIME_END_VALUES + (CAP_VALUE,):
-        _delete_value(_ROOT, UX_PATH, n)
+    def _delete_all() -> None:
+        for n in TIME_START_VALUES + TIME_END_VALUES + (CAP_VALUE,):
+            _delete_value(_ROOT, UX_PATH, n)
 
-    for n in POL_STATUS_VALUES:
-        _write_value(_ROOT, POL_PATH, n, 0, winreg.REG_DWORD)
-    for n in POL_DATE_VALUES:
-        _delete_value(_ROOT, POL_PATH, n)
+        for n in POL_STATUS_VALUES:
+            _write_value(_ROOT, POL_PATH, n, 0, winreg.REG_DWORD)
+        for n in POL_DATE_VALUES:
+            _delete_value(_ROOT, POL_PATH, n)
+
+    _atomic_write(_delete_all)
 
 
 def repair() -> dict[str, Any]:

@@ -482,6 +482,15 @@ class MainWindow(QWidget):
         except PermissionError as e:
             core.write_audit(tag + " 失败", "权限不足")
             self._toast("err", "权限不足", str(e))
+        except core.WriteFailed as e:
+            # 回滚干净 = 系统没变，轻提示就够；
+            # 没回滚干净 = 系统处于部分写入状态，必须挡住用户让他看完再决定。
+            core.write_audit(tag + " 失败", str(e).splitlines()[0][:120])
+            self.refresh_all()
+            if e.rolled_back:
+                self._toast("warn", "写入失败，已撤销", "系统已恢复到操作前状态，没有被改动。")
+            else:
+                QMessageBox.critical(self.window(), "写入未完成，需要处理", str(e))
         except Exception as e:
             core.write_audit(tag + " 失败", str(e))
             detail = traceback.format_exc(limit=2).replace("\n", " ")

@@ -5,7 +5,7 @@
 **只写「暂停」状态**——不禁用服务、不改组策略、不删任何文件。所以随时能在系统设置里点「恢复更新」，不会把系统搞坏。
 
 [![test](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml/badge.svg)](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml)
-![version](https://img.shields.io/badge/version-2.1.5-blue)
+![version](https://img.shields.io/badge/version-2.1.6-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -79,13 +79,13 @@ Release 里的成品就是这个配置打的，49MB，冷启动约 2.3 秒。CI 
 
 还能再小到约 35MB，但需要连 `opengl32sw.dll` 一起砍（19.7MB 的软件 OpenGL 回退）。**不建议**：砍掉后在没有显卡驱动的虚拟机、远程桌面或老机器上可能白屏。
 
-打包产物约 100MB（PySide6 占大头）。如果不需要 WebEngine / QML / 3D 等模块，加上 `--exclude-module` 可以显著瘦身。
+打包产物约 49MB（PySide6 占大头）。默认配置下 PyInstaller 还会把本机装着的 `scipy` / `numpy` / `PIL` 收进去——那是 qfluentwidgets 的 `[full]` extra，本工具用不到，加上 `--exclude-module` 能省掉近一半体积（完整命令见上）。
 
 打包前建议先跑一遍测试，确认环境没问题：
 
 ```powershell
 python core.py --selftest    # 29 项
-python test_e2e.py           # 39 项，写路径闭环
+python test_e2e.py           # 55 项，写路径闭环 + 失败回滚
 ```
 
 ### 界面操作
@@ -230,6 +230,8 @@ Windows 更新暂停工具 v2.1.3
 
 **不动的东西**：`wuauserv`、`UsoSvc`、`WaaSMedicSvc` 服务状态，不加 `NoAutoUpdate` 组策略，不删任何文件。
 
+这句话不是自我声明，CI 每次都会验：`test_hklm.py` 在真实写入前后各读一遍 `wuauserv` / `UsoSvc` / `WaaSMedicSvc` / `BITS` / `DoSvc` 的启动类型，比对必须完全一致。任何一次改动里若不小心动了服务配置，CI 直接红。
+
 ---
 
 ## 数据目录
@@ -321,6 +323,10 @@ python test_e2e.py
 | T5 | 测试模式下备份不导出真实 HKLM |
 | T6 | 回滚控制流（测试模式跳过实际导入） |
 | T7 | 参数校验与异常路径：年数越界拒绝、到期时间早于当前拒绝、起始晚于到期自动回退 |
+| T8 | **写入中途失败自动回滚**：第 6 个值写入时抛异常 → 到期时间与上限回到操作前（逐秒一致）、仍处于暂停状态、健康检查全绿；回滚本身失败时消息明确告知哪些没成功 |
+| T9 | **数据目录降级**：程序目录不可写时退到 `%LOCALAPPDATA%`，且降级目录能真的写备份 |
+
+T8 是这一套里最该在意的：11 个注册表值是一个整体，少写一个是「半暂停」——启用标记在、到期时间缺。这种状态比完全没写更糟，因为用户看到「操作失败」会以为什么都没变。所以写入包了一层「先快照、失败就整体退回」，回滚用内存快照而不是 `.reg` 文件（不受外部进程和文件占用影响）。
 
 全部用例都会断言「退出码 0」，可直接接进任何 CI。
 

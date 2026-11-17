@@ -133,6 +133,57 @@ def main() -> int:
         check("应用图标非空", False)
         traceback.print_exc()
 
+    # ---------- 写入失败时的提示分支 ----------
+    # 回滚干净 → 轻提示；没回滚干净 → 必须弹模态框挡住用户。
+    # 这里不真的写注册表，只是把 apply_pause 替换成抛异常，验证 UI 走对分支。
+    try:
+        from PySide6.QtWidgets import QMessageBox
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp(prefix="wu_gui_")
+        w.backups = core.BackupManager(Path(tmpdir))
+
+        shown = {"critical": 0, "toast": []}
+        orig_critical = QMessageBox.critical
+        orig_toast = gui.MainWindow._toast
+
+        QMessageBox.critical = staticmethod(
+            lambda *a, **k: shown.__setitem__("critical", shown["critical"] + 1))
+        gui.MainWindow._toast = lambda self, lv, t, c: shown["toast"].append((lv, t))
+
+        orig_apply = core.apply_pause
+        try:
+            # 情况 A：回滚干净
+            def raise_rolled_back(*a, **k):
+                raise core.WriteFailed("模拟写入失败", rolled_back=True)
+
+            core.apply_pause = raise_rolled_back
+            w._do_write("test-rolled-back", lambda: core.apply_pause(1))
+            check("回滚干净时用轻提示", shown["toast"] and shown["toast"][-1][0] == "warn",
+                  str(shown["toast"][-1] if shown["toast"] else None))
+            check("回滚干净时不弹模态框", shown["critical"] == 0, f"{shown['critical']} 次")
+
+            # 情况 B：回滚不完整
+            def raise_partial(*a, **k):
+                raise core.WriteFailed("模拟写入失败\n\n有 2 项没回滚成功", rolled_back=False)
+
+            core.apply_pause = raise_partial
+            w._do_write("test-partial", lambda: core.apply_pause(1))
+            check("回滚不完整时弹模态框", shown["critical"] == 1, f"{shown['critical']} 次")
+        finally:
+            core.apply_pause = orig_apply
+            QMessageBox.critical = orig_critical
+            gui.MainWindow._toast = orig_toast
+            # 清掉本次产生的备份文件
+            try:
+                import shutil as _sh
+                _sh.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        check("写入失败提示分支", False)
+        traceback.print_exc()
+
     # ---------- 线程异常 ----------
     app.processEvents()
     check("无线程级异常", len(thread_errors) == 0,

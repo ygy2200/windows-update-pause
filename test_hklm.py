@@ -24,11 +24,31 @@ from __future__ import annotations
 
 import os
 import sys
+import winreg
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import core  # noqa: E402
+
+# README 声称「不禁用任何服务」。这里挑几个最相关的，把这句话变成可断言的事实。
+WATCHED_SERVICES = ("wuauserv", "UsoSvc", "WaaSMedicSvc", "BITS", "DoSvc")
+
+
+def _service_start_types() -> dict[str, object]:
+    """读关键服务的启动类型：0=Boot 1=System 2=自动 3=手动 4=禁用。
+
+    读注册表而不是解析 sc.exe：不受控制台语言和编码影响。
+    启动类型是配置，不会被系统自己改；服务「运行/停止」会随系统活动变化，
+    所以只比对启动类型，比对运行状态会误报。
+    """
+    out: dict[str, object] = {}
+    for name in WATCHED_SERVICES:
+        v, _ = core._read_raw(
+            winreg.HKEY_LOCAL_MACHINE,
+            rf"SYSTEM\CurrentControlSet\Services\{name}", "Start")
+        out[name] = v
+    return out
 
 
 def _write_summary(text: str) -> None:
@@ -77,6 +97,10 @@ def main() -> int:
     print(f"\n原状态：cap={original.cap_days}  "
           f"expiry={original.expiry_utc}  "
           f"status={original.quality_status}/{original.feature_status}")
+
+    svc_before = _service_start_types()
+    print("服务启动类型（操作前）：" +
+          "  ".join(f"{k}={v}" for k, v in svc_before.items()))
 
     ok_write = False
     try:
@@ -132,6 +156,13 @@ def main() -> int:
         except Exception as e:
             fails += 1
             print(f"  FAIL  恢复原状失败: {e}")
+
+        # ---------- 6. 「不禁用服务」承诺的实证 ----------
+        svc_after = _service_start_types()
+        changed = {k: (svc_before.get(k), svc_after.get(k))
+                   for k in svc_before if svc_before.get(k) != svc_after.get(k)}
+        check("操作未改变任何服务的启动类型", not changed,
+              f"{len(svc_before)} 个服务均未变" if not changed else str(changed))
 
     print()
     print("=" * 58)

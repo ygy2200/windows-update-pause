@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import os
+import string
 import sys
 import tempfile
 import winreg
@@ -200,6 +202,151 @@ def main() -> int:
     check("起始晚于到期时自动回退",
           st7.expiry_utc is not None and 9 <= st7.remaining_days <= 10,
           f"剩余 {st7.remaining_days} 天")
+
+    # ---------------- T8 写入失败自动回滚 ----------------
+    print("\nT8  写入中途失败是否退回到操作前")
+
+    # 先建立一个已知的「操作前状态」：暂停 1 年
+    setup()
+    core.apply_pause(1)
+    before = core.read_pause_state()
+    before_end = before.expiry_utc
+    before_cap = before.cap_days
+    check("已建立操作前状态（暂停 1 年）",
+          before.is_paused and before.remaining_days >= 364,
+          f"剩余 {before.remaining_days} 天")
+
+    orig_write = core._write_value
+
+    # T8a：第 6 次写入失败一次 —— 回滚应当成功
+    seq = {"n": 0}
+
+    def flaky_once(root, path, name, value, vtype):
+        seq["n"] += 1
+        if seq["n"] == 6:
+            raise OSError("模拟注册表写入被拒绝")
+        return orig_write(root, path, name, value, vtype)
+
+    core._write_value = flaky_once
+    try:
+        core.apply_pause(40)
+        check("写入失败时应抛 WriteFailed", False, "没有抛异常")
+    except core.WriteFailed as e:
+        msg = str(e)
+        check("写入失败时抛 WriteFailed", True)
+        check("异常说明已回滚", "已自动恢复" in msg, msg.splitlines()[-1][:40])
+    except Exception as e:
+        check("异常类型应为 WriteFailed", False, repr(e))
+    finally:
+        core._write_value = orig_write
+
+    after = core.read_pause_state()
+    check("回滚后到期时间与操作前一致",
+          after.expiry_utc == before_end,
+          f"{after.expiry_utc} vs {before_end}")
+    check("回滚后上限与操作前一致", after.cap_days == before_cap,
+          f"{after.cap_days} vs {before_cap}")
+    check("回滚后仍处于暂停状态，不是半写", after.is_paused is True)
+
+    # 健康检查不该因为这次失败留下任何红项
+    rep = core.run_health_check()
+    core_fails = [c.key for c in rep.checks
+                  if c.category == "core" and c.status in ("fail", "warn")]
+    check("回滚后暂停有效性检查全绿", not core_fails, str(core_fails))
+
+    # T8b：从第 6 次起持续失败 —— 回滚不完整，必须在消息里说清
+    seq2 = {"n": 0}
+
+    def flaky_forever(root, path, name, value, vtype):
+        seq2["n"] += 1
+        if seq2["n"] >= 6:
+            raise OSError("模拟持续拒绝")
+        return orig_write(root, path, name, value, vtype)
+
+    core._write_value = flaky_forever
+    try:
+        core.apply_pause(40)
+        check("持续失败时应抛 WriteFailed", False, "没有抛异常")
+    except core.WriteFailed as e:
+        msg = str(e)
+        check("回滚不完整时明确告知", "没成功" in msg, msg.splitlines()[2][:40] if len(msg.splitlines()) > 2 else "")
+        check("给出后续处置建议", "一键修复" in msg)
+    except Exception as e:
+        check("异常类型应为 WriteFailed", False, repr(e))
+    finally:
+        core._write_value = orig_write
+
+    # T8c：clear_pause 也要走同一套保护
+    setup()
+    core.apply_pause(1)
+    before_clear = core.read_pause_state().expiry_utc
+    seq3 = {"n": 0}
+
+    def flaky_clear(root, path, name, value, vtype):
+        seq3["n"] += 1
+        if seq3["n"] == 2:
+            raise OSError("模拟清除时被拒绝")
+        return orig_write(root, path, name, value, vtype)
+
+    # clear_pause 只调 _delete_value 和 _write_value(状态位)，
+    # 所以要让删除也失败才触发回滚
+    orig_delete = core._delete_value
+    del_seq = {"n": 0}
+
+    def flaky_delete(root, path, name):
+        del_seq["n"] += 1
+        if del_seq["n"] == 3:
+            raise OSError("模拟删除被拒绝")
+        return orig_delete(root, path, name)
+
+    core._delete_value = flaky_delete
+    try:
+        core.clear_pause()
+        check("清除失败时应抛 WriteFailed", False, "没有抛异常")
+    except core.WriteFailed:
+        check("清除中途失败也走同一套回滚", True)
+    except Exception as e:
+        check("清除失败异常类型不对", False, repr(e))
+    finally:
+        core._delete_value = orig_delete
+
+    after_clear = core.read_pause_state()
+    check("清除失败后暂停状态被还原",
+          after_clear.expiry_utc == before_clear,
+          f"{after_clear.expiry_utc} vs {before_clear}")
+
+    # ---------------- T9 数据目录降级 ----------------
+    print("\nT9  程序目录不可写时是否退到 LOCALAPPDATA")
+
+    used = {d for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")}
+    free_letters = [d for d in string.ascii_uppercase
+                    if d not in used and d >= "R"]
+    if not free_letters:
+        check("找不到可用盘符做测试", False, "全盘符都被占用")
+    else:
+        ghost = Path(f"{free_letters[0]}:\\不存在的目录\\工具")
+        check("假目标确实不可用", not ghost.exists(), str(ghost))
+
+        bm_fb = core.BackupManager(ghost)
+        in_local = "WindowsUpdatePauseTool" in str(bm_fb.dir)
+        check("不可写时降级到 LOCALAPPDATA", in_local, str(bm_fb.dir))
+        check("降级目录名仍是 backup", bm_fb.dir.name == "backup", bm_fb.dir.name)
+
+        made = []
+        try:
+            bk_fb = bm_fb.snapshot("fallback-test")
+            made = [bk_fb["txt"], bk_fb["reg_ux"], bk_fb["reg_pol"]]
+            check("降级目录能真的写备份", Path(bk_fb["txt"]).exists(),
+                  Path(bk_fb["txt"]).name)
+            check("快照内容非空", Path(bk_fb["txt"]).stat().st_size > 100,
+                  f"{Path(bk_fb['txt']).stat().st_size} 字节")
+        finally:
+            # 只删本次生成的三个文件，不动目录里其它东西
+            for f in made:
+                try:
+                    rm_tree(str(f))
+                except Exception:
+                    pass
 
     # ---------------- 清理 ----------------
     print("\n清理测试树")
