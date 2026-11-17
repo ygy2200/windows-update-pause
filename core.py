@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 APP_NAME = "Windows 更新暂停工具"
-APP_VERSION = "2.1.4"
+APP_VERSION = "2.1.5"
 
 # ---------------- 注册表路径 ----------------
 

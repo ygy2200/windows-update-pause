@@ -33,6 +33,8 @@ from qfluentwidgets import (
 )
 
 import core
+import single_instance
+
 
 def _resolve_app_dir() -> Path:
     """定位「数据目录」。打包成单文件 exe 后 __file__ 指向临时解压目录
@@ -795,6 +797,11 @@ def main() -> int:
         return code
 
     # ---- GUI 模式 ----
+    # 放在 QApplication 之前：第二实例能秒退，省掉整套 Qt 初始化
+    if not single_instance.claim():
+        single_instance.activate_existing()
+        return 0
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)

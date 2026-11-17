@@ -38,6 +38,9 @@ jobs:
       - name: End-to-end (39 checks, HKCU sandbox)
         run: python test_e2e.py
 
+      - name: Single-instance guard (cross-process mutex)
+        run: python test_single_instance.py
+
       - name: Real HKLM round-trip (runs only if runner has admin)
         env:
           WU_PAUSE_ALLOW_HKLM_TEST: '1'

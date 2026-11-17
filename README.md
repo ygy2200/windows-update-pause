@@ -5,7 +5,7 @@
 **只写「暂停」状态**——不禁用服务、不改组策略、不删任何文件。所以随时能在系统设置里点「恢复更新」，不会把系统搞坏。
 
 [![test](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml/badge.svg)](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml)
-![version](https://img.shields.io/badge/version-2.1.3-blue)
+![version](https://img.shields.io/badge/version-2.1.5-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -32,9 +32,22 @@ Windows 11 24H2 之后的更新引擎有个行为：**只改注册表里的 `Fli
 
 首次打开是只读模式——读状态和跑自检不需要权限。点右上角「以管理员身份重启」之后才能修改。
 
+> **首次运行 Windows 会拦一下，这是正常的。**
+>
+> 这个 exe 没有商业代码签名证书（个人项目，一年几百美元），所以 SmartScreen 会显示「Windows 已保护你的电脑 / 未知发布者」。点「**更多信息**」→「**仍要运行**」即可。
+>
+> 介意的话有三个选择：
+> - 核对哈希：`certutil -hashfile WindowsUpdatePause.exe SHA256`，与 Release 页面标注的值比对
+> - 自己从源码打包（见下），全部代码都在仓库里，没有隐藏二进制
+> - 只跑源码：`python main.py`，不碰任何预编译文件
+>
+> 顺便说清它到底碰什么：**只写 11 个注册表值**（7 个在 `WindowsUpdate\UX\Settings`、4 个在 `WindowsUpdate\UpdatePolicy\Settings`），**不禁用任何服务、不改组策略、不联网**。想验证可以直接读 `core.py` 里 `apply_pause()` 的全部写入点，加起来就是这 11 个。
+
+**只允许开一个窗口。** 已经开着的时候再双击，不会出现第二个窗口——程序会把已有窗口提到前台然后自己退出。这是为了避免两个实例同时改同一批注册表、同时往同一个备份目录写文件。
+
 ### 从源码运行
 
-仓库**不含打包产物**——exe 有 100MB，超过 GitHub 的单文件限制。两种方式：
+仓库**不含打包产物**。exe 是构建产物，不进版本控制——否则每次改一行代码，仓库就多背一份 49MB 的二进制历史。两种方式：
 
 **直接跑脚本**（Python 3.9+）：
 
@@ -290,11 +303,7 @@ python -m py_compile core.py main.py
 
 S6 和 S7 是防伪的两道卡：前者防止「什么都报错」，后者防止「修完了却把到期时间改了」。
 
-### ③ UI 冒烟（offscreen）
-
-构造主窗口、刷新、备份对话框、缩到最小尺寸 860×680、浅色/深色主题来回切换，全程不得抛异常。
-
-### ④ 端到端闭环（`test_e2e.py`）
+### ③ 端到端闭环（`test_e2e.py`）
 
 ```powershell
 python test_e2e.py
@@ -314,6 +323,22 @@ python test_e2e.py
 | T7 | 参数校验与异常路径：年数越界拒绝、到期时间早于当前拒绝、起始晚于到期自动回退 |
 
 全部用例都会断言「退出码 0」，可直接接进任何 CI。
+
+### ④ 单实例保护（`test_single_instance.py`）
+
+```powershell
+python test_single_instance.py
+```
+
+**必须跨进程测**：同一进程里第二次 `CreateMutexW` 同名互斥体，`get_last_error` 仍然是 `ERROR_ALREADY_EXISTS`，测出来是假象，覆盖不到「另一个进程先跑」这个真实场景。所以用子进程持锁、父进程抢。
+
+| 项 | 验证内容 |
+|---|---|
+| T1 | 持锁子进程能拿到，第三个进程被拦 |
+| T2 | 持锁者退出后本进程能接管（**防句柄泄漏**） |
+| T3 | 接管后新进程仍被拦（锁没丢） |
+| T4 | 互斥体名不含版本号（跨版本互拦）、带 `Local\` 前缀（按登录会话隔离） |
+| T5 | 内核态异常时放行——单实例是体验优化，不能变成新的失败点 |
 
 ### ⑤ 真实 HKLM 往返（CI 专属）
 
@@ -364,7 +389,11 @@ CI 里这是**独立的一个 job，只装 README 写的那两条依赖**。目�
 |---|---|
 | `main.py` | 界面 |
 | `core.py` | 注册表读写、版本识别、健康检查、备份。无 GUI 依赖，可单独测 |
+| `single_instance.py` | 单实例保护（纯 Win32 命名互斥体，不依赖 Qt） |
 | `test_e2e.py` | 端到端闭环测试（HKCU 沙箱，不碰系统） |
+| `test_gui.py` | GUI 冒烟测试（offscreen，无需显示器） |
+| `test_hklm.py` | 真实注册表往返测试（仅 CI 或显式授权时执行） |
+| `test_single_instance.py` | 单实例的跨进程验证 |
 | `app.ico` | 图标 |
 | `WindowsUpdatePause.exe` | 打包产物（不入库，按上方命令自行生成） |
 | `backup\` | 备份（运行时生成） |
