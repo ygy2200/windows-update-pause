@@ -25,9 +25,36 @@ Windows 11 24H2 之后的更新引擎有个行为：**只改注册表里的 `Fli
 
 ## 用法
 
-双击 `WindowsUpdatePause.exe`（或 `main.py`）。
+### 从源码运行
 
-**首次会提示只读模式**——这是正常的：读状态、跑自检不需要权限，只有写入需要。点右上角「以管理员身份重启」，之后所有操作都能用，不用每次弹 UAC。
+仓库**不含打包产物**——exe 有 100MB，超过 GitHub 的单文件限制。两种方式：
+
+**直接跑脚本**（Python 3.9+）：
+
+```powershell
+pip install PySide6 PySide6-Fluent-Widgets
+python main.py
+```
+
+**自己打包成单文件 exe**：
+
+```powershell
+pip install pyinstaller
+pyinstaller --onefile --windowed --name WindowsUpdatePause --icon app.ico main.py
+```
+
+打包产物约 100MB（PySide6 占大头）。如果不需要 WebEngine / QML / 3D 等模块，加上 `--exclude-module` 可以显著瘦身。
+
+打包前建议先跑一遍测试，确认环境没问题：
+
+```powershell
+python core.py --selftest    # 29 项
+python test_e2e.py           # 39 项，写路径闭环
+```
+
+### 界面操作
+
+**首次打开会显示只读模式**——这是正常的：读状态、跑自检不需要权限，只有写入需要。点右上角「以管理员身份重启」，之后所有操作都能用，不用每次弹 UAC。
 
 界面三块：
 
@@ -39,13 +66,15 @@ Windows 11 24H2 之后的更新引擎有个行为：**只改注册表里的 `Fli
 
 ## 命令行用法
 
-除了双击开界面，exe 自己也带三个开关，方便脚本调用或排障：
+除了开界面，程序也带三个命令行开关，方便脚本调用或排障：
 
 ```powershell
 WindowsUpdatePause.exe --version    # 只打印版本
 WindowsUpdatePause.exe --status     # 打印状态与自检结果，不启动界面
 WindowsUpdatePause.exe --selftest   # 跑核心层 29 项自检（22 基础 + 7 故障注入）
 ```
+
+源码运行时把 `WindowsUpdatePause.exe` 换成 `python main.py`。
 
 `--status` 输出示例：
 
@@ -169,7 +198,7 @@ Windows 更新暂停工具 v2.1.3
 
 ## 数据目录
 
-备份和日志放在 **exe 所在目录** 下（`backup\`）。
+备份和日志放在 **程序所在目录** 下（`backup\`）。打包版是 exe 所在目录，源码运行时是 `main.py` 所在目录。
 
 这一点特意处理过：PyInstaller 单文件模式运行时会把自身解压到 `%TEMP%` 下的临时目录，此时 `__file__` 指向那里。如果把备份写在那儿，程序一退出就被系统清理，**等于根本没备份**。所以程序启动时：
 
@@ -291,6 +320,6 @@ python test_e2e.py
 | `core.py` | 注册表读写、版本识别、健康检查、备份。无 GUI 依赖，可单独测 |
 | `test_e2e.py` | 端到端闭环测试（HKCU 沙箱，不碰系统） |
 | `app.ico` | 图标 |
-| `WindowsUpdatePause.exe` | 打包后的单文件程序 |
+| `WindowsUpdatePause.exe` | 打包产物（不入库，按上方命令自行生成） |
 | `backup\` | 备份（运行时生成） |
 | `logs\operation.log` | 操作流水（运行时生成） |
