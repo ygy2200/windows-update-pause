@@ -68,6 +68,7 @@ def setup() -> None:
 
 
 def main() -> int:
+    core._ensure_utf8_stdout()
     print("=" * 58)
     print("端到端功能验证（HKCU 沙箱，不碰真实系统）")
     print("=" * 58)

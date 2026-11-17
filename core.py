@@ -250,6 +250,22 @@ def _full(path: str) -> str:
 
 # ---------------- 基础工具 ----------------
 
+def _ensure_utf8_stdout() -> None:
+    """把标准流转成 UTF-8。
+
+    英文版 Windows（以及 CI runner）的控制台代码页是 cp1252，
+    直接打印中文会抛 UnicodeEncodeError 并让脚本非零退出。
+    本机是 GBK 所以本地永远看不到这个问题——跨机器一跑就暴露。
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
 def has_admin() -> bool:
     try:
         import ctypes
@@ -1125,6 +1141,7 @@ def _fault_injection() -> tuple[int, list[str]]:
 # ---------------- 自检（开发用，验证核心逻辑） ----------------
 
 def _selftest() -> int:
+    _ensure_utf8_stdout()
     fails = 0
     print("=" * 60)
     print(f"{APP_NAME} v{APP_VERSION} 核心层自检")

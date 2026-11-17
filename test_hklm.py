@@ -44,6 +44,7 @@ def _write_summary(text: str) -> None:
 
 
 def main() -> int:
+    core._ensure_utf8_stdout()
     if os.environ.get("WU_PAUSE_ALLOW_HKLM_TEST") != "1":
         print("SKIP：未设置 WU_PAUSE_ALLOW_HKLM_TEST=1")
         print("      出于安全，不在本机真实注册表上做写入测试。")

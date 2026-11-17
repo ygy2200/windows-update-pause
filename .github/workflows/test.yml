@@ -12,6 +12,9 @@ permissions:
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      # Windows runner 控制台默认 cp1252，脚本输出是中文
+      PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@v4
 
