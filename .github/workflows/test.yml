@@ -42,3 +42,23 @@ jobs:
         env:
           WU_PAUSE_ALLOW_HKLM_TEST: '1'
         run: python test_hklm.py
+
+  gui:
+    # 单独一个 job：只装 README 里写的那两条依赖，验证用户照着做能不能跑起来
+    runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install GUI dependencies (exactly as documented in README)
+        run: pip install PySide6 PySide6-Fluent-Widgets
+
+      - name: GUI smoke test (offscreen)
+        run: python test_gui.py
