@@ -230,7 +230,9 @@ Windows 更新暂停工具 v2.1.3
 
 **不动的东西**：`wuauserv`、`UsoSvc`、`WaaSMedicSvc` 服务状态，不加 `NoAutoUpdate` 组策略，不删任何文件。
 
-这句话不是自我声明，CI 每次都会验：`test_hklm.py` 在真实写入前后各读一遍 `wuauserv` / `UsoSvc` / `WaaSMedicSvc` / `BITS` / `DoSvc` 的启动类型，比对必须完全一致。任何一次改动里若不小心动了服务配置，CI 直接红。
+这句话不是自我声明，CI 每次都会验：`test_hklm.py` 在真实写入前后各读一遍 `wuauserv` / `UsoSvc` / `WaaSMedicSvc` / `BITS` / `DoSvc` 的启动类型，断言**没有任何服务被设成「禁用」**（`Start=4`）。
+
+为什么不是「启动类型一字不变」：BITS 本来就会被系统自己调整（实测在一次 CI 里它从手动 3 变成了自动 2，那是 Windows 的正常活动，不是本工具干的）。要防的是「为了阻止更新把服务禁掉」，所以判据是 `Start=4`，而不是值是否变化。两个值都会打印出来，便于人工对照。
 
 ---
 

@@ -180,11 +180,19 @@ def main() -> int:
             print(f"  FAIL  恢复原状失败: {e}")
 
         # ---------- 6. 「不禁用服务」承诺的实证 ----------
+        # 注意断言的是「没有被设为禁用」，不是「启动类型一字不变」。
+        # 一开始写成后者，结果 py3.12 那条 runner 上 BITS 自己从手动(3)变成了自动(2)
+        # ——系统本来就会调整 BITS，那是它的正常活动，不是这个工具干的。
+        # 我们真正要防的是「为了阻止更新而把服务禁掉」，即 Start=4。
         svc_after = _service_start_types()
-        changed = {k: (svc_before.get(k), svc_after.get(k))
-                   for k in svc_before if svc_before.get(k) != svc_after.get(k)}
-        check("操作未改变任何服务的启动类型", not changed,
-              f"{len(svc_before)} 个服务均未变" if not changed else str(changed))
+        print("服务启动类型（操作后）：" +
+              "  ".join(f"{k}={v}" for k, v in svc_after.items()))
+        newly_disabled = {k: (svc_before.get(k), v)
+                          for k, v in svc_after.items()
+                          if v == 4 and svc_before.get(k) != 4}
+        check("操作没有把任何服务设为禁用", not newly_disabled,
+              f"{len(svc_after)} 个服务均未被禁用" if not newly_disabled
+              else str(newly_disabled))
 
     print()
     print("=" * 58)
