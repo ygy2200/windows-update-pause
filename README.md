@@ -77,6 +77,19 @@ pyinstaller --onefile --windowed --name WindowsUpdatePause --icon app.ico `
 
 Release 里的成品就是这个配置打的，49MB，冷启动约 2.3 秒。CI 的 gui job 恰好只装 `PySide6 + PySide6-Fluent-Widgets` 就能跑，等于替这个结论做了背书——不会因为少了这三个包而漏功能。
 
+**想要个桌面入口**（也可以自己建快捷方式指向 exe；下面这个脚本多给了两样东西：文件里写明指向哪一版、exe 丢了会明确报错）：
+
+```powershell
+# 生成到桌面
+python make_launcher.py "$env:USERPROFILE\Desktop"
+
+# 确认桌面上那个还跟得上当前版本（版本不一致时返回非零）
+python make_launcher.py --check "$env:USERPROFILE\Desktop"
+```
+
+启动器里带一行 `rem 版本 : x.y.z`，与窗口标题栏或 `--version` 输出对照，就能看出是不是最新。找不到 exe 时会停住并说明原因，而不是一闪而过让人以为点坏了。
+
+
 还能再小到约 35MB，但需要连 `opengl32sw.dll` 一起砍（19.7MB 的软件 OpenGL 回退）。**不建议**：砍掉后在没有显卡驱动的虚拟机、远程桌面或老机器上可能白屏。
 
 打包产物约 49MB（PySide6 占大头）。默认配置下 PyInstaller 还会把本机装着的 `scipy` / `numpy` / `PIL` 收进去——那是 qfluentwidgets 的 `[full]` extra，本工具用不到，加上 `--exclude-module` 能省掉近一半体积（完整命令见上）。
@@ -412,6 +425,7 @@ CI 里这是**独立的一个 job，只装 README 写的那两条依赖**。目�
 | `main.py` | 界面 |
 | `core.py` | 注册表读写、版本识别、健康检查、备份。无 GUI 依赖，可单独测 |
 | `single_instance.py` | 单实例保护（纯 Win32 命名互斥体，不依赖 Qt） |
+| `make_launcher.py` | 生成带版本注释的启动器 .bat（`--check` 可检查是否过期） |
 | `test_e2e.py` | 端到端闭环测试（HKCU 沙箱，不碰系统） |
 | `test_gui.py` | GUI 冒烟测试（offscreen，无需显示器） |
 | `test_hklm.py` | 真实注册表往返测试（仅 CI 或显式授权时执行） |
