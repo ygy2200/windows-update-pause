@@ -50,6 +50,22 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --name WindowsUpdatePause --icon app.ico main.py
 ```
 
+**关于体积。** 上面的命令直接打大约 100MB——PyInstaller 会从你的环境里把 `scipy` / `numpy` / `PIL` 一并收进来。这三个是 qfluentwidgets 的可选依赖（`[full]` extra），本工具用到的组件不需要。
+
+排除它们可以砍到 **49MB**：
+
+```powershell
+pyinstaller --onefile --windowed --name WindowsUpdatePause --icon app.ico `
+  --exclude-module scipy --exclude-module numpy --exclude-module PIL `
+  --exclude-module setuptools --exclude-module pkg_resources `
+  --exclude-module tkinter --exclude-module unittest --exclude-module pydoc `
+  main.py
+```
+
+Release 里的成品就是这个配置打的，49MB，冷启动约 2.3 秒。CI 的 gui job 恰好只装 `PySide6 + PySide6-Fluent-Widgets` 就能跑，等于替这个结论做了背书——不会因为少了这三个包而漏功能。
+
+还能再小到约 35MB，但需要连 `opengl32sw.dll` 一起砍（19.7MB 的软件 OpenGL 回退）。**不建议**：砍掉后在没有显卡驱动的虚拟机、远程桌面或老机器上可能白屏。
+
 打包产物约 100MB（PySide6 占大头）。如果不需要 WebEngine / QML / 3D 等模块，加上 `--exclude-module` 可以显著瘦身。
 
 打包前建议先跑一遍测试，确认环境没问题：
