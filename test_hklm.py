@@ -135,6 +135,28 @@ def main() -> int:
 
         ok_write = fails == 0
 
+        # ---------- 4b. 备份能不能真的把系统救回来 ----------
+        # 「恢复更新」和「导入备份」是用户最后的保险。此前它只在 HKCU 沙箱里
+        # 跑过（test_e2e 的 T10），真实 HKLM 上从未执行过。这里补上。
+        print("\n验证备份回滚（真跑 reg export/import）…")
+        import tempfile
+        bk_dir = Path(tempfile.mkdtemp(prefix="hklm_bk_"))
+        bm_live = core.BackupManager(bk_dir)
+        bk_live = bm_live.snapshot("hklm-roundtrip")
+        check("真实环境中 .reg 导出成功", bk_live.get("reg_ok") is True,
+              str(bk_live.get("warnings") or "无警告"))
+
+        core.clear_pause()
+        check("清除后确实没有暂停", core.read_pause_state().expiry_utc is None)
+
+        ok_rb, msg_rb = bm_live.restore(bk_live)
+        check("真实环境回滚执行成功", ok_rb is True, msg_rb)
+
+        st_rb = core.read_pause_state()
+        days_rb = st_rb.remaining_days
+        check("回滚后恢复成 10 年的暂停",
+              st_rb.is_paused and 3640 <= days_rb <= 3653, f"剩余 {days_rb} 天")
+
     finally:
         # ---------- 5. 恢复原状 ----------
         print("\n恢复原状…")

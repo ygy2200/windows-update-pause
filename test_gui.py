@@ -103,6 +103,26 @@ def main() -> int:
         check("备份对话框可打开", False)
         traceback.print_exc()
 
+    # ---------- 不完整备份必须在列表里被标出来 ----------
+    # 否则用户会选中它点回滚，等点了才发现 .reg 根本不存在
+    try:
+        import tempfile
+        bd = Path(tempfile.mkdtemp(prefix="wu_gui_bk_"))
+        bm2 = core.BackupManager(bd)
+        # 只写 txt，不写 .reg —— 模拟「reg.exe 导出失败」留下的那份
+        (bm2.dir / "snapshot-20260101-000000.txt").write_text(
+            "测试快照", encoding="utf-8")
+        d2 = gui.BackupDialog(bm2, w)
+        texts = [d2.list.item(i).text() for i in range(d2.list.count())]
+        check("不完整备份在列表里有标记",
+              any("⚠" in t for t in texts), str(texts))
+        check("汇总提示写明有几份不完整",
+              "不完整" in d2.info.text(), d2.info.text())
+        d2.deleteLater()
+    except Exception:
+        check("不完整备份标记", False)
+        traceback.print_exc()
+
     # ---------- 尺寸 ----------
     try:
         w.resize(860, 680)

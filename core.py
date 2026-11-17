@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 APP_NAME = "Windows 更新暂停工具"
-APP_VERSION = "2.1.6"
+APP_VERSION = "2.1.7"
 
 # ---------------- 注册表路径 ----------------
 
@@ -246,6 +246,17 @@ def reset_root() -> None:
 
 def _full(path: str) -> str:
     return _PREFIX + path if _PREFIX else path
+
+
+def _reg_key(path: str) -> str:
+    """给 reg.exe 用的完整键路径，随当前模式切换。
+
+    真实模式导出 HKLM；测试模式导出 HKCU 下的沙箱键——这样 `reg export` /
+    `reg import` 的整条链路在沙箱里也能真跑一遍，不用管理员。
+    """
+    if _PREFIX:
+        return "HKCU\\" + _full(path).rstrip("\\")
+    return "HKLM\\" + path
 
 
 # ---------------- 基础工具 ----------------
@@ -903,8 +914,11 @@ class BackupManager:
         reg_pol = self.dir / f"updatepolicy-settings-{ts}.reg"
         txt = self.dir / f"snapshot-{ts}.txt"
 
-        self._export(f"HKLM\\{UX_PATH}", reg_ux)
-        self._export(f"HKLM\\{POL_PATH}", reg_pol)
+        # 导出结果必须检查。以前忽略返回值，reg.exe 失败时照样返回「备份成功」，
+        # 文本里还写着「双击导入 xxx.reg」——回滚时才发现文件根本不存在。
+        ok_ux = self._export(UX_PATH, reg_ux)
+        ok_pol = self._export(POL_PATH, reg_pol)
+        reg_ok = ok_ux and ok_pol
 
         lines: list[str] = []
         lines.append("=" * 58)
@@ -913,7 +927,15 @@ class BackupManager:
         lines.append(f"时间   : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"操作   : {tag}")
         lines.append(f"计算机 : {os.environ.get('COMPUTERNAME', '')}")
+        lines.append(f"完整性 : {'完整（两个 .reg 均已生成）' if reg_ok else '不完整，见下方警告'}")
         lines.append("")
+        if not reg_ok:
+            lines.append("!" * 58)
+            lines.append("⚠ 自动导出 .reg 失败，这个备份无法用「导入」方式还原。")
+            lines.append("   下面这份文本快照仍然记录了改动前的全部值，可以照着手工恢复。")
+            lines.append("   写入本身不会受影响：软件内的自动回滚用的是内存快照，不依赖 .reg。")
+            lines.append("!" * 58)
+            lines.append("")
 
         for path in (UX_PATH, POL_PATH):
             lines.append(f"[HKLM\\{path}]")
@@ -934,27 +956,42 @@ class BackupManager:
             lines.append("")
 
         lines.append("还原办法：")
-        lines.append(f"  1) 双击导入 {reg_ux.name}")
-        lines.append(f"  2) 双击导入 {reg_pol.name}")
-        lines.append("  3) 在本软件里点「恢复更新」")
-        lines.append("")
-        lines.append("两个 .reg 只含上述两个键，不含其他系统设置。")
+        if reg_ok:
+            lines.append(f"  1) 双击导入 {reg_ux.name}")
+            lines.append(f"  2) 双击导入 {reg_pol.name}")
+            lines.append("  3) 在本软件里点「恢复更新」")
+            lines.append("")
+            lines.append("两个 .reg 只含上述两个键，不含其他系统设置。")
+        else:
+            lines.append("  .reg 未生成，无法双击导入。请在本软件里点「恢复更新」，")
+            lines.append("  或照上面列出的值手工改回。")
 
         txt.write_text("\r\n".join(lines), encoding="utf-8")
 
-        return {"txt": str(txt), "reg_ux": str(reg_ux),
-                "reg_pol": str(reg_pol), "timestamp": ts}
+        warnings = []
+        if not ok_ux:
+            warnings.append(f"{reg_ux.name} 导出失败")
+        if not ok_pol:
+            warnings.append(f"{reg_pol.name} 导出失败")
 
-    def _export(self, key: str, out: Path) -> bool:
-        # 测试模式下不碰真实 HKLM，直接跳过导出
-        if _PREFIX:
-            return False
+        return {"txt": str(txt), "reg_ux": str(reg_ux), "reg_pol": str(reg_pol),
+                "timestamp": ts, "reg_ok": reg_ok, "warnings": warnings}
+
+    def _export(self, path: str, out: Path) -> bool:
+        """导出一个键到 .reg。返回是否真的生成了可用文件。
+
+        测试模式不再跳过：导出的是 HKCU 沙箱键，导入回去也还是沙箱，
+        这样「导出 → 导入」整条链路本身才能被验证——它以前从来没跑过。
+        """
         try:
             r = subprocess.run(
-                ["reg.exe", "export", key, str(out), "/y"],
+                ["reg.exe", "export", _reg_key(path), str(out), "/y"],
                 capture_output=True, timeout=15,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            return r.returncode == 0
+            if r.returncode != 0:
+                return False
+            # reg.exe 返回 0 但文件是空的/缺失，同样算失败
+            return out.exists() and out.stat().st_size > 0
         except Exception:
             return False
 
@@ -962,11 +999,23 @@ class BackupManager:
         items = []
         for f in self.dir.glob("snapshot-*.txt"):
             ts = f.stem.replace("snapshot-", "")
+            reg_ux = self.dir / f"ux-settings-{ts}.reg"
+            reg_pol = self.dir / f"updatepolicy-settings-{ts}.reg"
+
+            # 备份是否真的可用，不能只看 txt 在不在。
+            # 导出失败的那些，txt 照样会生成，但 .reg 缺失——用户选中它才发现回滚不了。
+            def usable(p: Path) -> bool:
+                try:
+                    return p.exists() and p.stat().st_size > 0
+                except OSError:
+                    return False
+
             items.append({
                 "timestamp": ts,
                 "txt": str(f),
-                "reg_ux": str(self.dir / f"ux-settings-{ts}.reg"),
-                "reg_pol": str(self.dir / f"updatepolicy-settings-{ts}.reg"),
+                "reg_ux": str(reg_ux),
+                "reg_pol": str(reg_pol),
+                "reg_ok": usable(reg_ux) and usable(reg_pol),
                 "mtime": datetime.fromtimestamp(f.stat().st_mtime),
             })
         # 按修改时间倒序。文件名带 -1/-2 序号时字典序会把新的排到旧的后面
@@ -974,16 +1023,18 @@ class BackupManager:
         return items
 
     def restore(self, item: dict[str, Any]) -> tuple[bool, str]:
-        # 测试模式不执行真实导入：reg import 会写 HKLM，沙箱里必须挡住
-        if _PREFIX:
-            return True, "测试模式：已跳过实际导入"
+        """把备份的 .reg 导回去。
 
+        测试模式也真跑：导出的文件里写的是 HKCU 沙箱路径，导回去还是沙箱，
+        不会碰到真实 HKLM。这条路径以前一直被跳过，等于「最后的保险」从没验过。
+        """
         ok_all = True
         msgs = []
         for key in ("reg_ux", "reg_pol"):
             p = Path(item.get(key, ""))
             if not p.exists():
                 msgs.append(f"{p.name} 不存在，跳过")
+                ok_all = False
                 continue
             try:
                 r = subprocess.run(

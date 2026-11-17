@@ -35,7 +35,7 @@ jobs:
       - name: Core self-check (22 asserts + 7 fault-injection)
         run: python core.py --selftest
 
-      - name: End-to-end (55 checks, HKCU sandbox)
+      - name: End-to-end (72 checks, HKCU sandbox)
         run: python test_e2e.py
 
       - name: Single-instance guard (cross-process mutex)

@@ -508,12 +508,19 @@ class MainWindow(QWidget):
             when = core.fmt_local(end_local) if end_local else result["end"]
             mode = result.get("mode")
             if mode == "preserve":
-                return (f"已按原到期时间修复：{when}（共 {result['days']} 天），"
+                text = (f"已按原到期时间修复：{when}（共 {result['days']} 天），"
                         f"上限补到 {result['cap']} 天，备份 {name}")
-            if mode == "reset40":
-                return f"原暂停已失效，重设为 40 年：{when}，备份 {name}"
-            return f"暂停至 {when}（{result['days']} 天），备份已存 {name}"
-        return f"已完成，备份 {name}"
+            elif mode == "reset40":
+                text = f"原暂停已失效，重设为 40 年：{when}，备份 {name}"
+            else:
+                text = f"暂停至 {when}（{result['days']} 天），备份已存 {name}"
+        else:
+            text = f"已完成，备份 {name}"
+
+        # 备份里的 .reg 没导出成功时必须说出来，否则用户会以为能双击还原
+        if not bk.get("reg_ok", True):
+            text += "（注意：.reg 导出失败，无法双击还原，只能用「恢复更新」或照快照手工改回）"
+        return text
 
     def on_pause(self, years: int) -> None:
         if not self._require_admin():
@@ -647,9 +654,15 @@ class BackupDialog(QDialog):
         else:
             for it in self.items:
                 text = f"{it['mtime'].strftime('%Y-%m-%d %H:%M:%S')}    {it['timestamp']}"
+                if not it.get("reg_ok", True):
+                    text += "    ⚠ .reg 缺失，无法导入"
                 self.list.addItem(QListWidgetItem(text))
             self.list.setCurrentRow(0)
-            self.info.setText(f"共 {len(self.items)} 份备份")
+            bad = sum(1 for it in self.items if not it.get("reg_ok", True))
+            if bad:
+                self.info.setText(f"共 {len(self.items)} 份备份，其中 {bad} 份不完整（只能看快照，无法回滚）")
+            else:
+                self.info.setText(f"共 {len(self.items)} 份备份")
 
     def open_dir(self) -> None:
         try:
@@ -666,6 +679,13 @@ class BackupDialog(QDialog):
         it = self.items[row]
         if not core.has_admin():
             QMessageBox.warning(self, "需要管理员", "回滚需要管理员权限。")
+            return
+        if not it.get("reg_ok", True):
+            QMessageBox.warning(
+                self, "这份备份不完整",
+                "对应的 .reg 文件缺失或为空，无法用它回滚。\n\n"
+                "同一个时间戳的 snapshot-*.txt 里记录了改动前的全部值，"
+                "可以照着手工恢复；或者选另一份备份。")
             return
         ans = QMessageBox.question(
             self, "确认回滚",

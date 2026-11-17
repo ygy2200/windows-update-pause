@@ -170,10 +170,13 @@ def main() -> int:
               f"{lst[0]['timestamp']} / 期望 {b['timestamp']}")
 
     # ---------------- T6 回滚控制流 ----------------
-    print("\nT6  测试模式下回滚不执行真实导入")
+    print("\nT6  沙箱里的回滚真跑 reg import（写的是 HKCU，不碰 HKLM）")
     ok6, msg6 = bm.restore(b)
     check("restore 返回成功", ok6 is True, str(msg6))
-    check("提示标明测试模式", "测试模式" in msg6, str(msg6))
+    # 以前这里断言「跳过实际导入」。现在改成真跑——导出的是 HKCU 沙箱键，
+    # 导回去也还是沙箱，这样「备份能不能救回来」才真的被验过。
+    check("回滚真的执行了导入（不再跳过）", "跳过" not in msg6, str(msg6))
+    check("导入后状态仍可读", core.read_pause_state() is not None)
 
     # ---------------- T7 参数校验与异常路径 ----------------
     print("\nT7  参数校验与异常路径")
@@ -353,6 +356,90 @@ def main() -> int:
         tmp_root = str(Path(tempfile.gettempdir())).lower().rstrip("\\/")
         check("测试产物落在临时目录，未污染真实 LOCALAPPDATA",
               fake_local.lower().startswith(tmp_root), fake_local)
+
+    # ---------------- T10 备份 → 清除 → 回滚（真跑 reg.exe） ----------------
+    print("\nT10  备份能真的把系统救回来吗（真跑 reg export/import）")
+    setup()
+    core.apply_pause(1)
+    before_rb = core.read_pause_state()
+
+    # 故意用含中文的目录：项目本身的路径就带中文，这里顺带验证 reg.exe 不挑路径
+    bk_root = Path(tempfile.mkdtemp(prefix="wu_bk_")) / "中文目录"
+    bk_root.mkdir(parents=True, exist_ok=True)
+    bm_rt = core.BackupManager(bk_root)
+
+    bk_rt = bm_rt.snapshot("roundtrip")
+    check("导出成功（reg_ok 为 True）", bk_rt.get("reg_ok") is True,
+          str(bk_rt.get("warnings") or "无警告"))
+    check("ux .reg 已生成且非空",
+          Path(bk_rt["reg_ux"]).exists() and Path(bk_rt["reg_ux"]).stat().st_size > 0,
+          f"{Path(bk_rt['reg_ux']).stat().st_size if Path(bk_rt['reg_ux']).exists() else 0} 字节")
+    check("pol .reg 已生成且非空",
+          Path(bk_rt["reg_pol"]).exists() and Path(bk_rt["reg_pol"]).stat().st_size > 0,
+          f"{Path(bk_rt['reg_pol']).stat().st_size if Path(bk_rt['reg_pol']).exists() else 0} 字节")
+    check("中文路径下导出正常", "中文目录" in bk_rt["reg_ux"], bk_rt["reg_ux"])
+
+    # 清空，模拟「用户误操作后想退回」
+    core.clear_pause()
+    after_clear2 = core.read_pause_state()
+    check("清除后确实没有暂停", after_clear2.expiry_utc is None,
+          str(after_clear2.expiry_utc))
+
+    # 用备份回滚
+    ok_rb, msg_rb = bm_rt.restore(bk_rt)
+    check("回滚执行成功", ok_rb is True, msg_rb)
+
+    restored2 = core.read_pause_state()
+    drift2 = (abs((restored2.expiry_utc - before_rb.expiry_utc).total_seconds())
+              if restored2.expiry_utc else 9e9)
+    check("回滚后到期时间与原值一致", drift2 < 2, f"漂移 {drift2:.0f} 秒")
+    check("回滚后确实处于暂停状态", restored2.is_paused is True)
+    check("回滚后上限也恢复了", (restored2.cap_days or 0) >= 36500,
+          f"cap={restored2.cap_days}")
+
+    # ---------------- T11 导出失败不能谎报成功 ----------------
+    print("\nT11  导出失败时是否如实告知")
+    setup()
+    core.apply_pause(1)
+
+    bk_bad_root = Path(tempfile.mkdtemp(prefix="wu_bkbad_"))
+    bm_bad = core.BackupManager(bk_bad_root)
+    orig_export = core.BackupManager._export
+
+    def fail_export(self, path, out):
+        return False
+
+    core.BackupManager._export = fail_export
+    try:
+        bk_bad = bm_bad.snapshot("export-fail")
+    finally:
+        core.BackupManager._export = orig_export
+
+    check("导出失败时 reg_ok 为 False", bk_bad.get("reg_ok") is False,
+          str(bk_bad.get("reg_ok")))
+    check("导出失败时列出警告", bool(bk_bad.get("warnings")),
+          str(bk_bad.get("warnings")))
+
+    bad_text = Path(bk_bad["txt"]).read_text(encoding="utf-8")
+    check("快照里标注为不完整", "不完整" in bad_text)
+    # 不该再出现「1) 双击导入 ...」这种引导行；「无法双击导入」是正确表述，不算
+    check("不再引导用户去双击导入", "1) 双击导入" not in bad_text)
+    check("给出可用的替代办法", "恢复更新" in bad_text)
+    check("说明写入不受影响（内存回滚仍在）", "内存快照" in bad_text)
+
+    # 列表里必须能看出这份不能用，否则用户会选中它点回滚，然后才失败
+    listed = bm_bad.list_backups()
+    bad_entry = next((x for x in listed if x["timestamp"] == bk_bad["timestamp"]), None)
+    check("备份列表能识别出不完整的那份",
+          bad_entry is not None and bad_entry.get("reg_ok") is False,
+          str(bad_entry.get("reg_ok") if bad_entry else "没找到"))
+
+    # 对照组：正常导出的备份在列表里必须标为完整（防误报）
+    good_entry = next((x for x in bm_rt.list_backups()
+                       if x["timestamp"] == bk_rt["timestamp"]), None)
+    check("完整备份在列表里标为可用",
+          good_entry is not None and good_entry.get("reg_ok") is True,
+          str(good_entry.get("reg_ok") if good_entry else "没找到"))
 
     # ---------------- 清理 ----------------
     print("\n清理测试树")
