@@ -309,6 +309,17 @@ GitHub Actions 的 `windows-latest` runner 带管理员权限，所以**每次 p
 
 这一步证明的是：键组写得对、系统读得回、能干净还原。
 
+### ⑥ GUI 冒烟（offscreen）
+
+```powershell
+pip install PySide6 PySide6-Fluent-Widgets
+python test_gui.py
+```
+
+不需要真实显示器——用 Qt 的 offscreen 平台跑。覆盖：窗口构造、状态刷新、备份对话框、最小尺寸 860×680、浅色/深色主题切换、应用图标、线程级异常。
+
+CI 里这是**独立的一个 job，只装 README 写的那两条依赖**。目的是排除「本地装了多余包所以能跑」的假阳性——验证用户照着文档做真的能起界面。
+
 ---
 
 ## 高 DPI 说明
