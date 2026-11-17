@@ -41,6 +41,9 @@ jobs:
       - name: Single-instance guard (cross-process mutex)
         run: python test_single_instance.py
 
+      - name: Launcher version check
+        run: python test_launcher.py
+
       - name: Real HKLM round-trip (runs only if runner has admin)
         env:
           WU_PAUSE_ALLOW_HKLM_TEST: '1'
