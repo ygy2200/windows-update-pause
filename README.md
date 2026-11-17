@@ -5,7 +5,7 @@
 **只写「暂停」状态**——不禁用服务、不改组策略、不删任何文件。所以随时能在系统设置里点「恢复更新」，不会把系统搞坏。
 
 [![test](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml/badge.svg)](https://github.com/ygy2200/windows-update-pause/actions/workflows/test.yml)
-![version](https://img.shields.io/badge/version-2.1.7-blue)
+![version](https://img.shields.io/badge/version-2.1.8-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-lightgrey)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -31,6 +31,11 @@ Windows 11 24H2 之后的更新引擎有个行为：**只改注册表里的 `Fli
 从 [**Releases**](https://github.com/ygy2200/windows-update-pause/releases/latest) 下载 `WindowsUpdatePause.exe`，双击运行，免安装、免 Python 环境。
 
 首次打开是只读模式——读状态和跑自检不需要权限。点右上角「以管理员身份重启」之后才能修改。
+
+**想放桌面就直接把 exe 复制过去**，双击即用。它不会在桌面上生出任何文件夹——备份和日志固定在 `%LOCALAPPDATA%\WindowsUpdatePauseTool`（见「数据目录」一节）。这样多次复制也不会出现两份数据。
+
+（早期版本给的是 `.bat` 跳板，现在直接给 exe——少一层中间环节，双击就开，图标也是程序自己的。）
+
 
 > **首次运行 Windows 会拦一下，这是正常的。**
 >
@@ -251,14 +256,13 @@ Windows 更新暂停工具 v2.1.3
 
 ## 数据目录
 
-备份和日志放在 **程序所在目录** 下（`backup\`）。打包版是 exe 所在目录，源码运行时是 `main.py` 所在目录。
+备份和日志放在 **`%LOCALAPPDATA%\WindowsUpdatePauseTool`**，与 exe 放在哪里无关。
 
-这一点特意处理过：PyInstaller 单文件模式运行时会把自身解压到 `%TEMP%` 下的临时目录，此时 `__file__` 指向那里。如果把备份写在那儿，程序一退出就被系统清理，**等于根本没备份**。所以程序启动时：
+为什么不再跟随 exe：真实用法是把 exe 复制到桌面直接双击，那样 `backup\` 和 `logs\` 就会摊在桌面上，既难看又容易被当成垃圾清掉。固定一处之后，无论从哪个副本启动，看到的都是同一份备份。
 
-1. 打包模式下用 `sys.executable` 所在目录，而不是 `__file__` 所在目录
-2. 该目录不可写（例如放在 Program Files）时，退到 `%LOCALAPPDATA%\WindowsUpdatePauseTool\backup`
+另一件事也特意处理过：PyInstaller 单文件模式运行时会把自身解压到 `%TEMP%` 下的临时目录，此时 `__file__` 指向那里。如果把备份写在那儿，程序一退出就被系统清理，**等于根本没备份**。
 
-界面底部会显示当前实际使用的备份目录，可以随时核对。
+`%LOCALAPPDATA%` 不可写时（受限账户），依次退到用户目录、exe 所在目录。界面底部会显示当前实际使用的路径，鼠标悬停可看完整路径与日志位置。
 
 ---
 
@@ -426,6 +430,7 @@ CI 里这是**独立的一个 job，只装 README 写的那两条依赖**。目�
 | `core.py` | 注册表读写、版本识别、健康检查、备份。无 GUI 依赖，可单独测 |
 | `single_instance.py` | 单实例保护（纯 Win32 命名互斥体，不依赖 Qt） |
 | `make_launcher.py` | 生成带版本注释的启动器 .bat（`--check` 可检查是否过期） |
+| `deploy.py` | 把 exe 复制到桌面等目录，并校验目标是否最新（`--check`） |
 | `test_e2e.py` | 端到端闭环测试（HKCU 沙箱，不碰系统） |
 | `test_gui.py` | GUI 冒烟测试（offscreen，无需显示器） |
 | `test_hklm.py` | 真实注册表往返测试（仅 CI 或显式授权时执行） |

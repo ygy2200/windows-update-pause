@@ -37,16 +37,37 @@ import single_instance
 
 
 def _resolve_app_dir() -> Path:
-    """定位「数据目录」。打包成单文件 exe 后 __file__ 指向临时解压目录
-    （sys._MEIPASS），程序退出即被清理——备份绝不能写在那里。
-    因此打包模式必须用 exe 自身所在目录。
+    """定位「数据目录」：备份、日志、快照都放这里。
 
-    注意：这里刻意不写「临时文件再删掉」的探针。本机的 sitecustomize 会把
-    Path.unlink 劫持到回收站工具，那工具输出 UTF-8 却被按 GBK 解码，
-    会抛 UnicodeDecodeError。可写性改由 BackupManager 用 mkdir 判断。"""
+    固定在 `%LOCALAPPDATA%\\WindowsUpdatePauseTool`，不再跟随 exe 所在目录。
+
+    为什么改：早期用「exe 旁边」是为了便携，但真实用法是把 exe 复制到桌面
+    直接双击——那样 `backup\\` 和 `logs\\` 就摊在桌面上，既难看又容易被当成
+    垃圾删掉。固定一处之后，从哪个副本启动都是同一份数据，桌面永远是干净的。
+
+    注意不要把数据写进 `sys._MEIPASS`（打包后的临时解压目录），那里退出即清空。
+    也刻意不写「建个临时文件再删掉」的探针：本机 sitecustomize 会把 Path.unlink
+    劫持到回收站工具，而它输出 UTF-8 却按 GBK 解码，会抛 UnicodeDecodeError。
+    可写性用 mkdir 判断。
+    """
+    candidates: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local) / "WindowsUpdatePauseTool")
+    candidates.append(Path.home() / "WindowsUpdatePauseTool")
+    # 兜底：受限账户下用户目录也可能不可写，退回到 exe 旁边
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent
+        candidates.append(Path(sys.executable).resolve().parent)
+    else:
+        candidates.append(Path(__file__).resolve().parent)
+
+    for c in candidates:
+        try:
+            c.mkdir(parents=True, exist_ok=True)
+            return c
+        except OSError:
+            continue
+    return candidates[-1]
 
 
 APP_DIR = _resolve_app_dir()

@@ -123,6 +123,23 @@ def main() -> int:
         check("不完整备份标记", False)
         traceback.print_exc()
 
+    # ---------- 数据目录不能跟随 exe ----------
+    # 用户会把 exe 复制到桌面直接双击。如果数据目录跟着 exe 走，
+    # 桌面就会长出 backup\ 和 logs\。固定到 LOCALAPPDATA 才不会。
+    try:
+        app_dir = Path(gui.APP_DIR)
+        check("数据目录在 LOCALAPPDATA 下",
+              "WindowsUpdatePauseTool" in str(app_dir),
+              str(app_dir))
+        check("数据目录不在 exe 旁边",
+              app_dir.resolve() != Path(sys.executable).resolve().parent
+              if getattr(sys, "frozen", False)
+              else app_dir.resolve() != Path(gui.__file__).resolve().parent,
+              str(app_dir))
+    except Exception:
+        check("数据目录位置", False)
+        traceback.print_exc()
+
     # ---------- 尺寸 ----------
     try:
         w.resize(860, 680)
