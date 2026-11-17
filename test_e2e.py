@@ -327,26 +327,32 @@ def main() -> int:
         ghost = Path(f"{free_letters[0]}:\\不存在的目录\\工具")
         check("假目标确实不可用", not ghost.exists(), str(ghost))
 
-        bm_fb = core.BackupManager(ghost)
-        in_local = "WindowsUpdatePauseTool" in str(bm_fb.dir)
-        check("不可写时降级到 LOCALAPPDATA", in_local, str(bm_fb.dir))
-        check("降级目录名仍是 backup", bm_fb.dir.name == "backup", bm_fb.dir.name)
-
-        made = []
+        # 把 LOCALAPPDATA 指到临时目录：降级逻辑照样被测到（它本来就从这个
+        # 环境变量取路径），但不会往用户真实的 %LOCALAPPDATA% 里扔测试备份。
+        # 本机的删除操作会被安全钩子接管，清不干净——所以从一开始就不该写进去。
+        fake_local = tempfile.mkdtemp(prefix="wu_fb_")
+        old_local = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = fake_local
         try:
+            bm_fb = core.BackupManager(ghost)
+            in_local = str(bm_fb.dir).startswith(fake_local)
+            check("不可写时降级到 LOCALAPPDATA", in_local, str(bm_fb.dir))
+            check("降级目录名仍是 backup", bm_fb.dir.name == "backup", bm_fb.dir.name)
+
             bk_fb = bm_fb.snapshot("fallback-test")
-            made = [bk_fb["txt"], bk_fb["reg_ux"], bk_fb["reg_pol"]]
             check("降级目录能真的写备份", Path(bk_fb["txt"]).exists(),
                   Path(bk_fb["txt"]).name)
             check("快照内容非空", Path(bk_fb["txt"]).stat().st_size > 100,
                   f"{Path(bk_fb['txt']).stat().st_size} 字节")
         finally:
-            # 只删本次生成的三个文件，不动目录里其它东西
-            for f in made:
-                try:
-                    rm_tree(str(f))
-                except Exception:
-                    pass
+            if old_local is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = old_local
+
+        tmp_root = str(Path(tempfile.gettempdir())).lower().rstrip("\\/")
+        check("测试产物落在临时目录，未污染真实 LOCALAPPDATA",
+              fake_local.lower().startswith(tmp_root), fake_local)
 
     # ---------------- 清理 ----------------
     print("\n清理测试树")
