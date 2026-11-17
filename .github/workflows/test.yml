@@ -12,6 +12,12 @@ permissions:
 jobs:
   test:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # README 声称支持 3.9+，必须每个版本都真跑一遍
+        python-version: [ '3.9', '3.10', '3.11', '3.12', '3.13' ]
+    name: py${{ matrix.python-version }}
     env:
       # Windows runner 控制台默认 cp1252，脚本输出是中文
       PYTHONIOENCODING: utf-8
@@ -21,7 +27,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
+
+      - name: Python version
+        run: python -c "import sys; print(sys.version)"
 
       - name: Core self-check (22 asserts + 7 fault-injection)
         run: python core.py --selftest
