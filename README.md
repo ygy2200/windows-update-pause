@@ -431,6 +431,7 @@ CI 里这是**独立的一个 job，只装 README 写的那两条依赖**。目�
 | `single_instance.py` | 单实例保护（纯 Win32 命名互斥体，不依赖 Qt） |
 | `make_launcher.py` | 生成带版本注释的启动器 .bat（`--check` 可检查是否过期） |
 | `deploy.py` | 把 exe 复制到桌面等目录，并校验目标是否最新（`--check`） |
+| `verify.py` | 发布自检清单：代码/文档/产物/桌面/数据目录/Release 全链路一致性 |
 | `test_e2e.py` | 端到端闭环测试（HKCU 沙箱，不碰系统） |
 | `test_gui.py` | GUI 冒烟测试（offscreen，无需显示器） |
 | `test_hklm.py` | 真实注册表往返测试（仅 CI 或显式授权时执行） |
